@@ -3,8 +3,9 @@ pragma solidity ^0.8.9;
 
 import "hardhat/console.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
 
-contract DaysInARow is Ownable {
+contract DaysInARow is Ownable, Pausable {
     struct Commitment {
         address payable user;
         uint256 deposit;
@@ -32,30 +33,47 @@ contract DaysInARow is Ownable {
     constructor(address payable[] memory _lossAccounts) {
         setLossAccountsInternal(_lossAccounts);
 
-        // set the treasury to the owner
+        // set the treasury to the owner initially
         treasury = payable(msg.sender);
     }
 
     // function to set a rake percentage in basis points 
-    function setRakeBasisPoints(uint256 _rakeBasisPoints) public onlyOwner {
+    function setRakeBasisPoints(uint256 _rakeBasisPoints) public onlyOwner whenNotPaused {
         require(_rakeBasisPoints <= 10000, "Rake must be less than or equal to 10000");
         rakeBasisPoints = _rakeBasisPoints;
     }
 
     // function to set treasury address to a new address
-    function setTreasury(address payable _treasury) public onlyOwner {
+    function setTreasury(address payable _treasury) public onlyOwner whenNotPaused {
         treasury = _treasury;
     }
 
-    // this function returns an array of address of the loss accounts
-    function getLossAccounts() public view returns (address payable[] memory) {
-        address payable[] memory lossAccountAddresses = new address payable[](lossAccounts.length);
-        for (uint i = 0; i < lossAccounts.length; i++) {
-            lossAccountAddresses[i] = lossAccounts[i].accountAddress;
-        }
-        return lossAccountAddresses;
+    // function to add a new loss account
+    function addLossAccount(address payable _lossAccount) public onlyOwner whenNotPaused {
+        lossAccounts.push(
+            LossAccount({
+                accountAddress: _lossAccount,
+                commitments: new uint256[](0)
+            })
+        );
     }
 
+    // function to remove a loss account by address
+    function removeLossAccount(address payable _lossAccountAddress) public onlyOwner whenNotPaused {
+        uint lossAccountIndex = 0;
+        for (uint i = 0; i < lossAccounts.length; i++) {
+            if (lossAccounts[i].accountAddress == _lossAccountAddress) {
+                lossAccountIndex = i;
+                break;
+            }
+        }
+
+        // remove the loss account from the array
+        lossAccounts[lossAccountIndex] = lossAccounts[lossAccounts.length - 1];
+        lossAccounts.pop();
+    }
+
+    // setLossAccountsInternal sets the loss accounts to the given array of addresses
     function setLossAccountsInternal(
         address payable[] memory _lossAccounts
     ) internal {
@@ -70,37 +88,33 @@ contract DaysInARow is Ownable {
         }
     }
 
-    // function to wrap setLossAccounts as a public function that can be called by the owner
+    function getLossAccounts() public view returns (LossAccount[] memory) {
+        return lossAccounts;
+    }
+
+    // setLossAccountsPublic wraps setLossAccounts as a public function that can be called by the owner
     function setLossAccountsPublic(
         address payable[] memory _lossAccounts
-    ) public onlyOwner {
+    ) public onlyOwner whenNotPaused {
         setLossAccountsInternal(_lossAccounts);
     }
 
+    // createCommitment
     event CommitmentCreated(address indexed user, uint256 indexed commitmentId);
     function createCommitment(
         uint256 _targetDays,
         uint256 _lossAccountIndex,
         uint256 _startDate,
         string memory _habitTitle
-    ) public payable {
+    ) public payable whenNotPaused {
         require(msg.value > 0, "Deposit is required");
         require(_targetDays > 0, "Target days must be greater than 0");
-        require(
-            _lossAccountIndex < lossAccounts.length,
-            "Invalid loss account index"
-        );
+        require(_lossAccountIndex < lossAccounts.length, "Invalid loss account index");
         require(_startDate > block.timestamp, "Start date must be in the future");
+        require(bytes(_habitTitle).length > 0, "Habit Title cannot be empty");
 
-        uint256 habitTitleLength = bytes(_habitTitle).length;
-        require(habitTitleLength > 0, "Habit Title cannot be empty");
-
-        // transfer the rake to the treasury
         uint256 rakeAmount = (msg.value * rakeBasisPoints) / 10000;
-        if (rakeAmount > 0) {
-            (bool sent, ) = treasury.call{value: rakeAmount}("");
-            require(sent, "Failed to send rake to treasury");
-        }
+        require(rakeAmount < msg.value, "Total rake fee must be less than deposit");
 
         uint256 commitmentId = numCommitments;
         commitments[commitmentId] = Commitment({
@@ -121,18 +135,23 @@ contract DaysInARow is Ownable {
         numCommitments++;
 
         emit CommitmentCreated(msg.sender, commitmentId);
+
+        if (rakeAmount > 0) {
+            // transfer the rake to the treasury
+            (bool sent, ) = treasury.call{value: rakeAmount}("");
+            require(sent, "Failed to send rake to treasury");
+        }
     }
 
     event CheckIn(address indexed user, uint256 indexed commitmentId);
     event CommitmentCompleted(address indexed user, uint256 indexed commitmentId);
-    function checkIn(uint256 _commitmentId) public {
+    function checkIn(uint256 _commitmentId) public whenNotPaused {
         Commitment storage commitment = commitments[_commitmentId];
         require(msg.sender == commitment.user, "Only the user can check in");
         require(!commitment.completed, "Commitment already completed");
         require(!commitment.failed, "Commitment already failed");
 
         uint256 dayNum = getDayNum(_commitmentId);
-
         require(dayNum > 0, "You can't check in before the start date");
 
         if (isAbandoned(_commitmentId)) {
@@ -145,20 +164,20 @@ contract DaysInARow is Ownable {
         }
 
         if (commitment.checkedInDays == commitment.targetDays) {
-            (bool sent, ) = commitment.user.call{value: commitment.deposit}("");
-            require(sent, "Failed to send deposit back to user");
-
             commitment.completed = true;
             emit CommitmentCompleted(commitment.user, _commitmentId);
-        }
 
+            uint256 totalAmount = commitment.deposit - commitment.fee;
+
+            (bool sent, ) = commitment.user.call{value: totalAmount}("");
+            require(sent, "Failed to send deposit back to user");
+        }
         emit CheckIn(commitment.user, _commitmentId);
     }
 
     function getDayNum(uint256 _commitmentId) public view returns (uint256) {
         Commitment storage commitment = commitments[_commitmentId];
-        int256 secondsSinceStart = int256(block.timestamp) -
-            int256(commitment.startDate);
+        int256 secondsSinceStart = int256(block.timestamp) - int256(commitment.startDate);
 
         uint256 dayNum;
         if (secondsSinceStart < 0) {
@@ -167,12 +186,11 @@ contract DaysInARow is Ownable {
             // division will always round down
             dayNum = uint256(secondsSinceStart / 86400) + 1;
         }
-
         return (dayNum);
     }
 
     event Claimed(address indexed lossAccount, uint256 amount);
-    function claimAll() public {
+    function claimAll() public whenNotPaused {
         // find lossAccount from msg.sender
         uint lossAccountIndex = 0;
         for (uint i = 0; i < lossAccounts.length; i++) {
@@ -184,10 +202,9 @@ contract DaysInARow is Ownable {
 
         LossAccount storage lossAccount = lossAccounts[lossAccountIndex];
         address lossAccountAddress = lossAccount.accountAddress;
-
         require(msg.sender == lossAccountAddress, "Only the loss account can claim");
+        
         uint256 totalAmount = 0;
-
         for (uint i = 0; i < lossAccount.commitments.length; i++) {
             uint256 _commitmentId = lossAccount.commitments[i];
             Commitment storage commitment = commitments[_commitmentId];
@@ -196,7 +213,7 @@ contract DaysInARow is Ownable {
                 // only able to claim if the commitment has been abandoned for more than 1 day
                 if (isAbandoned(_commitmentId)) {
                     commitmentFailed(_commitmentId);
-                    totalAmount += commitment.deposit;
+                    totalAmount = totalAmount + commitment.deposit - commitment.fee;
                 }
             }
         }
@@ -206,7 +223,7 @@ contract DaysInARow is Ownable {
 
     // function that finalizes a commitment after it has been aboandoned and transfers the deposit to the loss account
     // - Anyone can call this function and pay gas to finalize the commitment
-    function finalizeCommitment(uint256 _commitmentId) public {
+    function finalizeCommitment(uint256 _commitmentId) public whenNotPaused {
         Commitment storage commitment = commitments[_commitmentId];
         require(!commitment.completed, "Commitment already completed");
         require(!commitment.failed, "Commitment already failed");
@@ -225,20 +242,33 @@ contract DaysInARow is Ownable {
 
         LossAccount storage lossAccount = lossAccounts[commitment.lossAccountIndex];
 
-        (bool sent, ) = lossAccount.accountAddress.call{value: commitment.deposit}("");
-        require(sent, "Failed to send deposit to loss account");
+        uint256 totalAmount = commitment.deposit - commitment.fee;
 
         commitment.failed = true;
         emit CommitmentFailed(commitment.user, _commitmentId);
+
+        (bool sent, ) = lossAccount.accountAddress.call{value: totalAmount}("");
+        require(sent, "Failed to send deposit to loss account");
     }
 
     function isAbandoned(uint256 _commitmentId) public view returns (bool) {
         Commitment storage commitment = commitments[_commitmentId];
 
         uint256 dayNum = getDayNum(_commitmentId);
-
         bool late = dayNum > commitment.checkedInDays + 1;
 
         return (late && !commitment.completed && !commitment.failed);
+    }
+
+    function pause() public onlyOwner {
+        _pause();
+    }
+
+    function unpause() public onlyOwner {
+        _unpause();
+    }
+
+    fallback() external {
+        revert("Operation not supported");
     }
 }

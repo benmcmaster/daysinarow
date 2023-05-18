@@ -32,6 +32,13 @@ describe("DaysInARow", function () {
         const habitTitle = "Test Commitment";
         const value = ethers.utils.parseEther("1");
 
+        // set the rake to 250 basis points
+        const rakeBasisPoints = 250;
+        await daysInARow.setRakeBasisPoints(rakeBasisPoints);
+        
+        // calculate the rake amount
+        const expectedRakeAmount = value.mul(rakeBasisPoints).div(10000);
+
         await daysInARow.connect(testUser1).createCommitment(targetDays, lossAccountIndex, startDateUnixTimestamp, habitTitle, { value });
 
         const commitmentId = 0; // we expect this to be the first commitment created
@@ -39,6 +46,7 @@ describe("DaysInARow", function () {
         return { 
             daysInARow, 
             value, 
+            expectedRakeAmount, 
             lossAccountIndex, 
             commitmentId, 
             habitTitle, 
@@ -79,7 +87,56 @@ describe("DaysInARow", function () {
 
             const lossAccounts = await daysInARow.getLossAccounts();
 
-            expect(lossAccounts).to.eql(initialLossAccounts);
+            //Create an array of loss account addresses
+            const lossAccountAddressArray = [];
+            for (let i = 0; i < lossAccounts.length; i++) {
+                lossAccountAddressArray.push(lossAccounts[i].accountAddress);
+            }
+
+            expect(lossAccountAddressArray).to.eql(initialLossAccounts);
+        });
+
+        it("Should add a new loss account correctly", async function () {
+            const { daysInARow, testUser1 } = await loadFixture(deployDaysInARowFixture);
+
+            const newLossAccount = testUser1.address;
+            await daysInARow.addLossAccount(newLossAccount);
+
+            const lossAccounts = await daysInARow.getLossAccounts();
+
+            // loop through lossAccounts to make sure the new loss account was added
+            let found = false;
+            for (let i = 0; i < lossAccounts.length; i++) {
+                if (lossAccounts[i].accountAddress === newLossAccount) {
+                    found = true;
+                    break;
+                }
+            }
+            expect(found).to.equal(true);
+        });
+
+        it("Should remove a loss account correctly", async function () {
+            const { daysInARow, testUser1 } = await loadFixture(deployDaysInARowFixture);
+
+            const newLossAccount = testUser1.address;
+
+            // add the new loss account
+            await daysInARow.addLossAccount(newLossAccount);
+
+            // remove the new loss account
+            await daysInARow.removeLossAccount(newLossAccount);
+
+            const lossAccounts = await daysInARow.getLossAccounts();
+
+            // loop through lossAccounts to make sure the new loss account was removed
+            let found = false;
+            for (let i = 0; i < lossAccounts.length; i++) {
+                if (lossAccounts[i].accountAddress === newLossAccount) {
+                    found = true;
+                    break;
+                }
+            }
+            expect(found).to.equal(false);
         });
 
         it("Should set the right owner", async function () {
@@ -128,12 +185,13 @@ describe("DaysInARow", function () {
 
     describe("Create Commitment", function () {
         it("Should create a commitment with correct values", async function () {
-            const { daysInARow, value, commitmentId, lossAccountIndex, habitTitle, targetDays, startDateUnixTimestamp, testUser1 } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
+            const { daysInARow, value, expectedRakeAmount, commitmentId, lossAccountIndex, habitTitle, targetDays, startDateUnixTimestamp, testUser1 } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
 
             const commitment = await daysInARow.commitments(commitmentId);
 
             expect(commitment.user).to.equal(testUser1.address);
             expect(commitment.deposit).to.equal(value);
+            expect(commitment.fee).to.equal(expectedRakeAmount);
             expect(commitment.targetDays).to.equal(targetDays);
             expect(commitment.checkedInDays).to.equal(0);
             expect(commitment.completed).to.equal(false);
@@ -257,6 +315,21 @@ describe("DaysInARow", function () {
             await expect(daysInARow.connect(testUser1).createCommitment(targetDays, lossAccountIndex, startDateUnixTimestamp, habitTitle, { value }))
                 .to.emit(daysInARow, "CommitmentCreated").withArgs(testUser1.address, commitmentId);
         });
+
+        it("Should revert when the contract is paused", async function() {
+            const { daysInARow, testUser1 } = await loadFixture(deployDaysInARowFixture);
+
+            await daysInARow.pause();
+
+            const targetDays = 7;
+            const lossAccountIndex = 1;
+            const startDateUnixTimestamp = await getStartDateUnixTimestamp();
+            const habitTitle = "Test Commitment";
+            const value = ethers.utils.parseEther("1");
+
+            await expect(daysInARow.connect(testUser1).createCommitment(targetDays, lossAccountIndex, startDateUnixTimestamp, habitTitle, { value }))
+                .to.be.revertedWith("Pausable: paused");
+        });
     });
     describe("Checkin", function () {
         it('Should not allow someone else to check in for a user', async function () {
@@ -355,11 +428,14 @@ describe("DaysInARow", function () {
 
             const commitment = await daysInARow.commitments(commitmentId);
 
-            expect(lossAccountFinalBalance.sub(lossAccountInitialBalance)).to.equal(commitment.deposit);
+            // expected final balance
+            const expectedFinalBalance = lossAccountInitialBalance.add(commitment.deposit).sub(commitment.fee);
+
+            expect(lossAccountFinalBalance).to.equal(expectedFinalBalance);
         });
 
         it('Should transfer the deposit back to the user if the commitment is completed successfully', async function () {
-            const { daysInARow, value, commitmentId, testUser1, targetDays } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
+            const { daysInARow, value, expectedRakeAmount, commitmentId, testUser1, targetDays } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
 
             for (let i = 0; i < targetDays - 1; i++) {
                 await time.increase(86400); // Increase time by 1 day
@@ -374,10 +450,17 @@ describe("DaysInARow", function () {
             const txReceipt = await tx.wait();
             const gasUsed = txReceipt.cumulativeGasUsed.mul(txReceipt.effectiveGasPrice);
             const userFinalBalance = await ethers.provider.getBalance(testUser1.address);
-            const testUser1InitialBalanceMinusGas = BigNumber.from(testUser1InitialBalance).sub(gasUsed);
-            const expectedFinalBalance = BigNumber.from(testUser1InitialBalanceMinusGas).add(value);
+            const expectedFinalBalance = testUser1InitialBalance.sub(gasUsed).add(value).sub(expectedRakeAmount);
 
             expect(expectedFinalBalance).to.equal(userFinalBalance);
+        });
+
+        it("Should revert when the contract is paused", async function() {
+            const { daysInARow, commitmentId, testUser1 } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
+
+            await daysInARow.pause();
+
+            await expect(daysInARow.connect(testUser1).checkIn(commitmentId)).to.be.revertedWith("Pausable: paused");
         });
     });
     describe("Finalize Commitment", function () {
@@ -450,11 +533,22 @@ describe("DaysInARow", function () {
             const commitment = await daysInARow.commitments(commitmentId);
             expect(commitment.failed).to.equal(true);
         });
+        it("Should revert when the contract is paused", async function() {
+            const { daysInARow, commitmentId, testUser1 } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
+
+            await daysInARow.pause();
+
+            await expect(daysInARow.finalizeCommitment(commitmentId)).to.be.revertedWith("Pausable: paused");
+        });
     });
     describe("Claim All", function () {
 
         async function createMultipleCommitmentsFixture() {
             const { daysInARow, owner, initialLossAccounts, lossAccount_1, lossAccount_2, testUser1, testUser2 } = await loadFixture(deployDaysInARowFixture);
+
+            // set the rake to 2.5% or 250 basis points
+            const rakeBasisPoints = 250;
+            await daysInARow.setRakeBasisPoints(rakeBasisPoints);
 
             const targetDays1 = 3; // User creates a commitment for 3 days
             const lossAccountIndex = 1; // lossAccount_1
@@ -470,9 +564,13 @@ describe("DaysInARow", function () {
             await daysInARow.connect(testUser2).createCommitment(targetDays2, lossAccountIndex, startDateUnixTimestamp, habitTitle2, { value });
             const commitmentID2 = 1; // we expect this to be the second commitment created
 
+            // expected total rake amount
+            const expectedTotalRakeAmount = value.mul(rakeBasisPoints).div(10000).mul(2);
+
             return {
                 daysInARow,
                 value,
+                expectedTotalRakeAmount,
                 lossAccountIndex,
                 commitmentID1,
                 commitmentID2,
@@ -491,7 +589,7 @@ describe("DaysInARow", function () {
         }
 
         it("Should claim all abandoned commitments", async function () {
-            const { daysInARow, value, lossAccount_1 } = await loadFixture(createMultipleCommitmentsFixture);
+            const { daysInARow, value, expectedTotalRakeAmount, lossAccount_1 } = await loadFixture(createMultipleCommitmentsFixture);
 
             await time.increase(86400 * 6); // Increase time by 6 days to abandon the commitments
 
@@ -505,18 +603,18 @@ describe("DaysInARow", function () {
             const txReceipt = await tx.wait();
             const gasUsed = txReceipt.cumulativeGasUsed.mul(txReceipt.effectiveGasPrice);
 
-            const expectedTotalAccountBalance = initialLossAccountBalance.add(expectedTotalDeposit).sub(gasUsed);
+            const expectedTotalAccountBalance = initialLossAccountBalance.add(expectedTotalDeposit).sub(gasUsed).sub(expectedTotalRakeAmount);
             const finalLossAccountBalance = await ethers.provider.getBalance(lossAccount_1.address);
 
             expect(finalLossAccountBalance).to.equal(expectedTotalAccountBalance);
         });
 
         it("Should emit a claim event", async function () {
-            const { daysInARow, commitmentID1, commitmentID2, value, lossAccount_1 } = await loadFixture(createMultipleCommitmentsFixture);
+            const { daysInARow, commitmentID1, commitmentID2, value, expectedTotalRakeAmount, lossAccount_1 } = await loadFixture(createMultipleCommitmentsFixture);
 
             await time.increase(86400 * 3); // Increase time by 3 days to abandon the commitments
 
-            const expectedTotalDeposit = value.mul(2);
+            const expectedTotalDeposit = value.mul(2).sub(expectedTotalRakeAmount);
 
             await expect(daysInARow.connect(lossAccount_1).claimAll())
                 .to.emit(daysInARow, "Claimed")
@@ -549,6 +647,14 @@ describe("DaysInARow", function () {
             const { daysInARow, testUser1 } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
             
             await expect(daysInARow.connect(testUser1).claimAll()).to.be.revertedWith("Only the loss account can claim");
+        });
+
+        it("Should revert when the contract is paused", async function() {
+            const { daysInARow, lossAccount_1 } = await loadFixture(createMultipleCommitmentsFixture);
+
+            await daysInARow.pause();
+
+            await expect(daysInARow.connect(lossAccount_1).claimAll()).to.be.revertedWith("Pausable: paused");
         });
     });
 });
