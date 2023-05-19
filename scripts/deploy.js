@@ -13,7 +13,7 @@ async function main() {
   const initialLossAccounts = [owner.address, lossAccount_1.address, lossAccount_2.address];
 
   const DaysInARow = await hre.ethers.getContractFactory("DaysInARow");
-  const daysInARow = await DaysInARow.deploy(initialLossAccounts);
+  const daysInARow = await DaysInARow.deploy();
 
   await daysInARow.deployed();
 

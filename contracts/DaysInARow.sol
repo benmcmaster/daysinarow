@@ -15,24 +15,18 @@ contract DaysInARow is Ownable, Pausable {
         bool completed;
         bool failed;
         uint256 startDate;
-        uint256 lossAccountIndex;
+        address lossAccountAddress;
         string habitTitle;
     }
     mapping(uint256 => Commitment) public commitments;
     uint256 public numCommitments;
 
-    struct LossAccount {
-        address payable accountAddress;
-        uint256[] commitments;
-    }
-    LossAccount[] public lossAccounts;
+    mapping(address => uint256[]) public lossAccountCommitments;
 
     address payable public treasury;
     uint256 public rakeBasisPoints = 0;
 
-    constructor(address payable[] memory _lossAccounts) {
-        setLossAccountsInternal(_lossAccounts);
-
+    constructor() {
         // set the treasury to the owner initially
         treasury = payable(msg.sender);
     }
@@ -48,68 +42,20 @@ contract DaysInARow is Ownable, Pausable {
         treasury = _treasury;
     }
 
-    // function to add a new loss account
-    function addLossAccount(address payable _lossAccount) public onlyOwner whenNotPaused {
-        lossAccounts.push(
-            LossAccount({
-                accountAddress: _lossAccount,
-                commitments: new uint256[](0)
-            })
-        );
-    }
-
-    // function to remove a loss account by address
-    function removeLossAccount(address payable _lossAccountAddress) public onlyOwner whenNotPaused {
-        uint lossAccountIndex = 0;
-        for (uint i = 0; i < lossAccounts.length; i++) {
-            if (lossAccounts[i].accountAddress == _lossAccountAddress) {
-                lossAccountIndex = i;
-                break;
-            }
-        }
-
-        // remove the loss account from the array
-        lossAccounts[lossAccountIndex] = lossAccounts[lossAccounts.length - 1];
-        lossAccounts.pop();
-    }
-
-    // setLossAccountsInternal sets the loss accounts to the given array of addresses
-    function setLossAccountsInternal(
-        address payable[] memory _lossAccounts
-    ) internal {
-        delete lossAccounts;
-        for (uint i = 0; i < _lossAccounts.length; i++) {
-            lossAccounts.push(
-                LossAccount({
-                    accountAddress: _lossAccounts[i],
-                    commitments: new uint256[](0)
-                })
-            );
-        }
-    }
-
-    function getLossAccounts() public view returns (LossAccount[] memory) {
-        return lossAccounts;
-    }
-
-    // setLossAccountsPublic wraps setLossAccounts as a public function that can be called by the owner
-    function setLossAccountsPublic(
-        address payable[] memory _lossAccounts
-    ) public onlyOwner whenNotPaused {
-        setLossAccountsInternal(_lossAccounts);
-    }
-
     // createCommitment
     event CommitmentCreated(address indexed user, uint256 indexed commitmentId);
     function createCommitment(
         uint256 _targetDays,
-        uint256 _lossAccountIndex,
+        address _lossAccountAddress,
         uint256 _startDate,
         string memory _habitTitle
     ) public payable whenNotPaused {
         require(msg.value > 0, "Deposit is required");
         require(_targetDays > 0, "Target days must be greater than 0");
-        require(_lossAccountIndex < lossAccounts.length, "Invalid loss account index");
+        
+        // require loss account address
+        require(_lossAccountAddress != address(0), "Invalid loss account address");
+
         require(_startDate > block.timestamp, "Start date must be in the future");
         require(bytes(_habitTitle).length > 0, "Habit Title cannot be empty");
 
@@ -126,11 +72,11 @@ contract DaysInARow is Ownable, Pausable {
             completed: false,
             failed: false,
             startDate: _startDate,
-            lossAccountIndex: _lossAccountIndex,
+            lossAccountAddress: _lossAccountAddress,
             habitTitle: _habitTitle
         });
 
-        lossAccounts[_lossAccountIndex].commitments.push(commitmentId);
+        lossAccountCommitments[_lossAccountAddress].push(commitmentId);
 
         numCommitments++;
 
@@ -189,48 +135,38 @@ contract DaysInARow is Ownable, Pausable {
         return (dayNum);
     }
 
-    event Claimed(address indexed lossAccount, uint256 amount);
-    function claimAll() public whenNotPaused {
-        // find lossAccount from msg.sender
-        uint lossAccountIndex = 0;
-        for (uint i = 0; i < lossAccounts.length; i++) {
-            if (lossAccounts[i].accountAddress == msg.sender) {
-                lossAccountIndex = i;
-                break;
-            }
-        }
-
-        LossAccount storage lossAccount = lossAccounts[lossAccountIndex];
-        address lossAccountAddress = lossAccount.accountAddress;
-        require(msg.sender == lossAccountAddress, "Only the loss account can claim");
-        
-        uint256 totalAmount = 0;
-        for (uint i = 0; i < lossAccount.commitments.length; i++) {
-            uint256 _commitmentId = lossAccount.commitments[i];
-            Commitment storage commitment = commitments[_commitmentId];
-
-            if (!commitment.failed && !commitment.completed) {
-                // only able to claim if the commitment has been abandoned for more than 1 day
-                if (isAbandoned(_commitmentId)) {
-                    commitmentFailed(_commitmentId);
-                    totalAmount = totalAmount + commitment.deposit - commitment.fee;
-                }
-            }
-        }
-        require(totalAmount > 0, "No commitments to claim");
-        emit Claimed(msg.sender, totalAmount);
-    }
-
     // function that finalizes a commitment after it has been aboandoned and transfers the deposit to the loss account
     // - Anyone can call this function and pay gas to finalize the commitment
     function finalizeCommitment(uint256 _commitmentId) public whenNotPaused {
         Commitment storage commitment = commitments[_commitmentId];
         require(!commitment.completed, "Commitment already completed");
         require(!commitment.failed, "Commitment already failed");
-
         require(isAbandoned(_commitmentId), "This commitment is still active");
 
         commitmentFailed(_commitmentId);
+    }
+    event Claimed(address indexed lossAccountAddress, uint256 amount);
+    function claimAllForLossAccount(address _lossAccountAddress) public whenNotPaused {
+        require(_lossAccountAddress != address(0), "Loss account address is required");
+
+        uint256[] memory commitmentsForLossAccount = lossAccountCommitments[_lossAccountAddress];
+        require(commitmentsForLossAccount.length > 0, "No commitments to claim for this address");
+
+        uint256 totalAmount = 0;
+        for (uint256 i = 0; i < commitmentsForLossAccount.length; i++) {
+            uint256 commitmentId = commitmentsForLossAccount[i];
+            Commitment storage commitment = commitments[commitmentId];
+
+            if (!commitment.failed && !commitment.completed) {
+                // only able to claim if the commitment has been abandoned for more than 1 day
+                if (isAbandoned(commitmentId)) {
+                    commitmentFailed(commitmentId);
+                    totalAmount = totalAmount + commitment.deposit - commitment.fee;
+                }
+            }
+        }
+        require(totalAmount > 0, "No commitments to claim");
+        emit Claimed(_lossAccountAddress, totalAmount);
     }
 
     // function call commitmentFailed to fail a commitment
@@ -240,15 +176,13 @@ contract DaysInARow is Ownable, Pausable {
         require(!commitment.completed, "Commitment already completed");
         require(!commitment.failed, "Commitment already failed");
 
-        LossAccount storage lossAccount = lossAccounts[commitment.lossAccountIndex];
-
         uint256 totalAmount = commitment.deposit - commitment.fee;
 
         commitment.failed = true;
         emit CommitmentFailed(commitment.user, _commitmentId);
 
-        (bool sent, ) = lossAccount.accountAddress.call{value: totalAmount}("");
-        require(sent, "Failed to send deposit to loss account");
+        (bool sent, ) = commitment.lossAccountAddress.call{value: totalAmount}("");
+        require(sent, "Failed to send deposit to loss account address");
     }
 
     function isAbandoned(uint256 _commitmentId) public view returns (bool) {
