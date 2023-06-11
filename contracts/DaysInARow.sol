@@ -21,6 +21,7 @@ contract DaysInARow is Ownable, Pausable {
     mapping(uint256 => Commitment) public commitments;
     uint256 public numCommitments;
 
+    mapping(address => uint256[]) public accountCommitments;
     mapping(address => uint256[]) public lossAccountCommitments;
 
     address payable public treasury;
@@ -29,21 +30,38 @@ contract DaysInARow is Ownable, Pausable {
     constructor() {
         // set the treasury to the owner initially
         treasury = payable(msg.sender);
+
+        // set the treasury to the owner initially
+        setRakeBasisPoints(250);
     }
 
-    // function to set a rake percentage in basis points 
-    function setRakeBasisPoints(uint256 _rakeBasisPoints) public onlyOwner whenNotPaused {
-        require(_rakeBasisPoints <= 10000, "Rake must be less than or equal to 10000");
+    // function to set a rake percentage in basis points
+    function setRakeBasisPoints(
+        uint256 _rakeBasisPoints
+    ) public onlyOwner whenNotPaused {
+        require(
+            _rakeBasisPoints <= 10000,
+            "Rake must be less than or equal to 10000"
+        );
         rakeBasisPoints = _rakeBasisPoints;
     }
 
     // function to set treasury address to a new address
-    function setTreasury(address payable _treasury) public onlyOwner whenNotPaused {
+    function setTreasury(
+        address payable _treasury
+    ) public onlyOwner whenNotPaused {
         treasury = _treasury;
+    }
+
+    function getAccountCommitments(
+        address _account
+    ) public view returns (uint256[] memory) {
+        return accountCommitments[_account];
     }
 
     // createCommitment
     event CommitmentCreated(address indexed user, uint256 indexed commitmentId);
+
     function createCommitment(
         uint256 _targetDays,
         address _lossAccountAddress,
@@ -52,15 +70,24 @@ contract DaysInARow is Ownable, Pausable {
     ) public payable whenNotPaused {
         require(msg.value > 0, "Deposit is required");
         require(_targetDays > 0, "Target days must be greater than 0");
-        
-        // require loss account address
-        require(_lossAccountAddress != address(0), "Invalid loss account address");
 
-        require(_startDate > block.timestamp, "Start date must be in the future");
+        // require loss account address
+        require(
+            _lossAccountAddress != address(0),
+            "Invalid loss account address"
+        );
+
+        require(
+            _startDate > block.timestamp,
+            "Start date must be in the future"
+        );
         require(bytes(_habitTitle).length > 0, "Habit Title cannot be empty");
 
         uint256 rakeAmount = (msg.value * rakeBasisPoints) / 10000;
-        require(rakeAmount < msg.value, "Total rake fee must be less than deposit");
+        require(
+            rakeAmount < msg.value,
+            "Total rake fee must be less than deposit"
+        );
 
         uint256 commitmentId = numCommitments;
         commitments[commitmentId] = Commitment({
@@ -76,6 +103,7 @@ contract DaysInARow is Ownable, Pausable {
             habitTitle: _habitTitle
         });
 
+        accountCommitments[msg.sender].push(commitmentId);
         lossAccountCommitments[_lossAccountAddress].push(commitmentId);
 
         numCommitments++;
@@ -90,7 +118,11 @@ contract DaysInARow is Ownable, Pausable {
     }
 
     event CheckIn(address indexed user, uint256 indexed commitmentId);
-    event CommitmentCompleted(address indexed user, uint256 indexed commitmentId);
+    event CommitmentCompleted(
+        address indexed user,
+        uint256 indexed commitmentId
+    );
+
     function checkIn(uint256 _commitmentId) public whenNotPaused {
         Commitment storage commitment = commitments[_commitmentId];
         require(msg.sender == commitment.user, "Only the user can check in");
@@ -123,7 +155,8 @@ contract DaysInARow is Ownable, Pausable {
 
     function getDayNum(uint256 _commitmentId) public view returns (uint256) {
         Commitment storage commitment = commitments[_commitmentId];
-        int256 secondsSinceStart = int256(block.timestamp) - int256(commitment.startDate);
+        int256 secondsSinceStart = int256(block.timestamp) -
+            int256(commitment.startDate);
 
         uint256 dayNum;
         if (secondsSinceStart < 0) {
@@ -145,12 +178,24 @@ contract DaysInARow is Ownable, Pausable {
 
         commitmentFailed(_commitmentId);
     }
-    event Claimed(address indexed lossAccountAddress, uint256 amount);
-    function claimAllForLossAccount(address _lossAccountAddress) public whenNotPaused {
-        require(_lossAccountAddress != address(0), "Loss account address is required");
 
-        uint256[] memory commitmentsForLossAccount = lossAccountCommitments[_lossAccountAddress];
-        require(commitmentsForLossAccount.length > 0, "No commitments to claim for this address");
+    event Claimed(address indexed lossAccountAddress, uint256 amount);
+
+    function claimAllForLossAccount(
+        address _lossAccountAddress
+    ) public whenNotPaused {
+        require(
+            _lossAccountAddress != address(0),
+            "Loss account address is required"
+        );
+
+        uint256[] memory commitmentsForLossAccount = lossAccountCommitments[
+            _lossAccountAddress
+        ];
+        require(
+            commitmentsForLossAccount.length > 0,
+            "No commitments to claim for this address"
+        );
 
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < commitmentsForLossAccount.length; i++) {
@@ -161,7 +206,10 @@ contract DaysInARow is Ownable, Pausable {
                 // only able to claim if the commitment has been abandoned for more than 1 day
                 if (isAbandoned(commitmentId)) {
                     commitmentFailed(commitmentId);
-                    totalAmount = totalAmount + commitment.deposit - commitment.fee;
+                    totalAmount =
+                        totalAmount +
+                        commitment.deposit -
+                        commitment.fee;
                 }
             }
         }
@@ -171,6 +219,7 @@ contract DaysInARow is Ownable, Pausable {
 
     // function call commitmentFailed to fail a commitment
     event CommitmentFailed(address indexed user, uint256 indexed commitmentId);
+
     function commitmentFailed(uint256 _commitmentId) internal {
         Commitment storage commitment = commitments[_commitmentId];
         require(!commitment.completed, "Commitment already completed");
@@ -181,7 +230,9 @@ contract DaysInARow is Ownable, Pausable {
         commitment.failed = true;
         emit CommitmentFailed(commitment.user, _commitmentId);
 
-        (bool sent, ) = commitment.lossAccountAddress.call{value: totalAmount}("");
+        (bool sent, ) = commitment.lossAccountAddress.call{value: totalAmount}(
+            ""
+        );
         require(sent, "Failed to send deposit to loss account address");
     }
 

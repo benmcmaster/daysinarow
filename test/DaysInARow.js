@@ -83,73 +83,26 @@ describe("DaysInARow", function () {
     }
 
     describe("Deployment", function () {
-        // it("Should set the loss accounts", async function () {
-        //     const { daysInARow, initialLossAccounts } = await loadFixture(deployDaysInARowFixture);
-
-        //     const lossAccounts = await daysInARow.getLossAccounts();
-
-        //     //Create an array of loss account addresses
-        //     const lossAccountAddressArray = [];
-        //     for (let i = 0; i < lossAccounts.length; i++) {
-        //         lossAccountAddressArray.push(lossAccounts[i].accountAddress);
-        //     }
-
-        //     expect(lossAccountAddressArray).to.eql(initialLossAccounts);
-        // });
-
-        // it("Should add a new loss account correctly", async function () {
-        //     const { daysInARow, testUser1 } = await loadFixture(deployDaysInARowFixture);
-
-        //     const newLossAccount = testUser1.address;
-        //     await daysInARow.addLossAccount(newLossAccount);
-
-        //     const lossAccounts = await daysInARow.getLossAccounts();
-
-        //     // loop through lossAccounts to make sure the new loss account was added
-        //     let found = false;
-        //     for (let i = 0; i < lossAccounts.length; i++) {
-        //         if (lossAccounts[i].accountAddress === newLossAccount) {
-        //             found = true;
-        //             break;
-        //         }
-        //     }
-        //     expect(found).to.equal(true);
-        // });
-
-        // it("Should remove a loss account correctly", async function () {
-        //     const { daysInARow, testUser1 } = await loadFixture(deployDaysInARowFixture);
-
-        //     const newLossAccount = testUser1.address;
-
-        //     // add the new loss account
-        //     await daysInARow.addLossAccount(newLossAccount);
-
-        //     // remove the new loss account
-        //     await daysInARow.removeLossAccount(newLossAccount);
-
-        //     const lossAccounts = await daysInARow.getLossAccounts();
-
-        //     // loop through lossAccounts to make sure the new loss account was removed
-        //     let found = false;
-        //     for (let i = 0; i < lossAccounts.length; i++) {
-        //         if (lossAccounts[i].accountAddress === newLossAccount) {
-        //             found = true;
-        //             break;
-        //         }
-        //     }
-        //     expect(found).to.equal(false);
-        // });
-
+        
         it("Should set the right owner", async function () {
             const { daysInARow, owner } = await loadFixture(deployDaysInARowFixture);
 
             expect(await daysInARow.owner()).to.equal(owner.address);
         });
 
-        it("Should set the rake correctly", async function () {
+        it("Should set the rake correctly on deploy", async function () {
             const { daysInARow } = await loadFixture(deployDaysInARowFixture);
 
-            const rakeBasisPoints = 250;
+            const rakeBasisPoints = 350;
+            await daysInARow.setRakeBasisPoints(rakeBasisPoints);
+
+            expect(await daysInARow.rakeBasisPoints()).to.equal(rakeBasisPoints);
+        });
+
+        it("Should set the rake correctly after deploy", async function () {
+            const { daysInARow } = await loadFixture(deployDaysInARowFixture);
+
+            const rakeBasisPoints = 350;
             await daysInARow.setRakeBasisPoints(rakeBasisPoints);
 
             expect(await daysInARow.rakeBasisPoints()).to.equal(rakeBasisPoints);
@@ -158,7 +111,7 @@ describe("DaysInARow", function () {
         it("Should only let owner set rake", async function () {
             const { daysInARow, testUser1 } = await loadFixture(deployDaysInARowFixture);
 
-            const rakeBasisPoints = 250;
+            const rakeBasisPoints = 350;
 
             // should revert because testUser1 is not the owner
             await expect(daysInARow.connect(testUser1).setRakeBasisPoints(rakeBasisPoints)).to.be.revertedWith("Ownable: caller is not the owner");
@@ -201,6 +154,17 @@ describe("DaysInARow", function () {
             expect(commitment.startDate).to.equal(startDateUnixTimestamp);
             expect(commitment.habitTitle).to.equal(habitTitle);
         });
+
+        it("Should create a commitment with correct accountCommitments and lossAccountCommitments values", async function () {
+            const { daysInARow, value, expectedRakeAmount, commitmentId, lossAccountAddress, habitTitle, targetDays, startDateUnixTimestamp, testUser1 } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
+
+            // expect the accountCommitments to be correct
+            const accountCommitments = await daysInARow.getAccountCommitments(testUser1.address);
+            console.log("accountCommitments: ", accountCommitments);
+
+            expect(accountCommitments[0]).to.equal(commitmentId);
+        });
+
 
         it("Should fail if no deposit is provided", async function () {
             const { daysInARow, lossAccount_1, testUser1 } = await loadFixture(deployDaysInARowFixture);
