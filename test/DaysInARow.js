@@ -4,7 +4,7 @@ const {
 } = require("@nomicfoundation/hardhat-network-helpers");
 const { expect } = require("chai");
 const { BigNumber } = ethers;
-const {AddressZero} = require("@ethersproject/constants");
+const { AddressZero } = require("@ethersproject/constants");
 
 describe("DaysInARow", function () {
     // We define a fixture to reuse the same setup in every test.
@@ -36,7 +36,7 @@ describe("DaysInARow", function () {
         // set the rake to 250 basis points
         const rakeBasisPoints = 250;
         await daysInARow.setRakeBasisPoints(rakeBasisPoints);
-        
+
         // calculate the rake amount
         const expectedRakeAmount = value.mul(rakeBasisPoints).div(10000);
 
@@ -44,21 +44,21 @@ describe("DaysInARow", function () {
 
         const commitmentId = 0; // we expect this to be the first commitment created
 
-        return { 
-            daysInARow, 
-            value, 
-            expectedRakeAmount, 
-            lossAccountAddress, 
-            commitmentId, 
-            habitTitle, 
-            targetDays, 
-            owner, 
-            startDateUnixTimestamp, 
-            initialLossAccounts, 
-            lossAccount_1, 
-            lossAccount_2, 
-            testUser1, 
-            testUser2 
+        return {
+            daysInARow,
+            value,
+            expectedRakeAmount,
+            lossAccountAddress,
+            commitmentId,
+            habitTitle,
+            targetDays,
+            owner,
+            startDateUnixTimestamp,
+            initialLossAccounts,
+            lossAccount_1,
+            lossAccount_2,
+            testUser1,
+            testUser2
         };
     }
 
@@ -83,7 +83,7 @@ describe("DaysInARow", function () {
     }
 
     describe("Deployment", function () {
-        
+
         it("Should set the right owner", async function () {
             const { daysInARow, owner } = await loadFixture(deployDaysInARowFixture);
 
@@ -160,7 +160,6 @@ describe("DaysInARow", function () {
 
             // expect the accountCommitments to be correct
             const accountCommitments = await daysInARow.getAccountCommitments(testUser1.address);
-            console.log("accountCommitments: ", accountCommitments);
 
             expect(accountCommitments[0]).to.equal(commitmentId);
         });
@@ -233,6 +232,49 @@ describe("DaysInARow", function () {
                 .to.be.revertedWith("Habit Title cannot be empty");
         });
 
+        it("Should get the correct number commitments", async function () {
+            const { daysInARow, lossAccount_1, testUser1 } = await loadFixture(deployDaysInARowFixture);
+
+            // User creates a commitment with invalid loss account index
+            const targetDays = 7;
+            const lossAccountAddress = lossAccount_1.address;
+            const startDateUnixTimestamp = await getStartDateUnixTimestamp();
+            const value = ethers.utils.parseEther("1");
+            
+            await daysInARow.connect(testUser1).createCommitment(targetDays, lossAccountAddress, startDateUnixTimestamp, "Test Commitment 1", { value });
+            await daysInARow.connect(testUser1).createCommitment(targetDays, lossAccountAddress, startDateUnixTimestamp, "Test Commitment 2", { value });
+
+            const commitments = await daysInARow.getAccountCommitments(testUser1.address);
+
+            expect(commitments.length).to.equal(2);
+            expect(commitments[0].toNumber()).to.equal(0);
+            expect(commitments[1].toNumber()).to.equal(1);
+
+        });
+
+        it("Should get the correct number commitments even after advancing a few days", async function () {
+            const { daysInARow, lossAccount_1, testUser1 } = await loadFixture(deployDaysInARowFixture);
+
+            // User creates a commitment with invalid loss account index
+            const targetDays = 7;
+            const lossAccountAddress = lossAccount_1.address;
+            const startDateUnixTimestamp = await getStartDateUnixTimestamp();
+            const value = ethers.utils.parseEther("1");
+            
+            await daysInARow.connect(testUser1).createCommitment(targetDays, lossAccountAddress, startDateUnixTimestamp, "Test Commitment 1", { value });
+            await daysInARow.connect(testUser1).createCommitment(targetDays, lossAccountAddress, startDateUnixTimestamp, "Test Commitment 2", { value });
+
+            await time.increase(86400);
+            await time.increase(86400);
+
+            const commitments = await daysInARow.getAccountCommitments(testUser1.address);
+
+            expect(commitments.length).to.equal(2);
+            expect(commitments[0].toNumber()).to.equal(0);
+            expect(commitments[1].toNumber()).to.equal(1);
+
+        });
+
         it("Should take the correct rake", async function () {
             const { daysInARow, lossAccount_1, testUser1 } = await loadFixture(deployDaysInARowFixture);
 
@@ -281,7 +323,7 @@ describe("DaysInARow", function () {
                 .to.emit(daysInARow, "CommitmentCreated").withArgs(testUser1.address, commitmentId);
         });
 
-        it("Should revert when the contract is paused", async function() {
+        it("Should revert when the contract is paused", async function () {
             const { daysInARow, lossAccount_1, testUser1 } = await loadFixture(deployDaysInARowFixture);
 
             await daysInARow.pause();
@@ -324,6 +366,16 @@ describe("DaysInARow", function () {
             await expect(daysInARow.connect(testUser1).checkIn(commitmentId))
                 .to.emit(daysInARow, "CheckIn")
                 .withArgs(testUser1.address, commitmentId);
+        });
+
+        it("Should allow user to check in more than once per day", async function () {
+            const { daysInARow, commitmentId, testUser1, targetDays } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
+
+            await time.increase(86400); // Increase time by 1 day
+            daysInARow.connect(testUser1).checkIn(commitmentId);
+
+            await expect(daysInARow.connect(testUser1).checkIn(commitmentId)).to.be.revertedWith("You can't check in twice for the same day");
+
         });
 
         it('Should not allow a user to check in if the commitment has already failed', async function () {
@@ -419,7 +471,7 @@ describe("DaysInARow", function () {
             expect(expectedFinalBalance).to.equal(userFinalBalance);
         });
 
-        it("Should revert when the contract is paused", async function() {
+        it("Should revert when the contract is paused", async function () {
             const { daysInARow, commitmentId, testUser1 } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
 
             await daysInARow.pause();
@@ -497,7 +549,7 @@ describe("DaysInARow", function () {
             const commitment = await daysInARow.commitments(commitmentId);
             expect(commitment.failed).to.equal(true);
         });
-        it("Should revert when the contract is paused", async function() {
+        it("Should revert when the contract is paused", async function () {
             const { daysInARow, commitmentId, testUser1 } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
 
             await daysInARow.pause();
@@ -586,7 +638,7 @@ describe("DaysInARow", function () {
         });
 
         it("Should not claim active commitments", async function () {
-            const { daysInARow, commitmentID1, commitmentID2, lossAccount_1, lossAccount_2} = await loadFixture(createMultipleCommitmentsFixture);
+            const { daysInARow, commitmentID1, commitmentID2, lossAccount_1, lossAccount_2 } = await loadFixture(createMultipleCommitmentsFixture);
 
             await time.increase(86400 * 1); // Increase time by 1 days. Commitments are still active
 
@@ -594,7 +646,7 @@ describe("DaysInARow", function () {
         });
 
         it("Should not claim completed commitments", async function () {
-            const { daysInARow, commitmentId, testUser1, targetDays, lossAccount_1} = await loadFixture(deployDaysInARowCreateCommitmentFixture);
+            const { daysInARow, commitmentId, testUser1, targetDays, lossAccount_1 } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
 
             for (let i = 0; i < targetDays - 1; i++) {
                 await time.increase(86400); // Increase time by 1 day
@@ -607,7 +659,7 @@ describe("DaysInARow", function () {
             await expect(daysInARow.connect(lossAccount_1).claimAllForLossAccount(lossAccount_1.address)).to.be.revertedWith("No commitments to claim");
         });
 
-        it("Should revert when the contract is paused", async function() {
+        it("Should revert when the contract is paused", async function () {
             const { daysInARow, lossAccount_1 } = await loadFixture(createMultipleCommitmentsFixture);
 
             await daysInARow.pause();

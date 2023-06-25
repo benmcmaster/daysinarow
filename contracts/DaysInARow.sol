@@ -56,6 +56,7 @@ contract DaysInARow is Ownable, Pausable {
     function getAccountCommitments(
         address _account
     ) public view returns (uint256[] memory) {
+        console.log("getAccountCommitments: %s", _account);
         return accountCommitments[_account];
     }
 
@@ -77,6 +78,8 @@ contract DaysInARow is Ownable, Pausable {
             "Invalid loss account address"
         );
 
+        console.log("Start date: %s", _startDate);
+        console.log("Block timestamp: %s", block.timestamp);
         require(
             _startDate > block.timestamp,
             "Start date must be in the future"
@@ -131,6 +134,7 @@ contract DaysInARow is Ownable, Pausable {
 
         uint256 dayNum = getDayNum(_commitmentId);
         require(dayNum > 0, "You can't check in before the start date");
+        require(dayNum > commitment.checkedInDays, "You can't check in twice for the same day");
 
         if (isAbandoned(_commitmentId)) {
             commitmentFailed(_commitmentId);
@@ -151,6 +155,11 @@ contract DaysInARow is Ownable, Pausable {
             require(sent, "Failed to send deposit back to user");
         }
         emit CheckIn(commitment.user, _commitmentId);
+    }
+
+    // function return the current timestamp
+    function getTimestamp() public view returns (uint256) {
+        return block.timestamp;
     }
 
     function getDayNum(uint256 _commitmentId) public view returns (uint256) {
