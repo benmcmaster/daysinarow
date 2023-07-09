@@ -56,8 +56,15 @@ contract DaysInARow is Ownable, Pausable {
     function getAccountCommitments(
         address _account
     ) public view returns (uint256[] memory) {
-        console.log("getAccountCommitments: %s", _account);
+        // console.log("getAccountCommitments: %s", _account);
         return accountCommitments[_account];
+    }
+
+    function getLossAccountCommitments(
+        address _account
+    ) public view returns (uint256[] memory) {
+        // console.log("getLossAccountCommitments: %s", _account);
+        return lossAccountCommitments[_account];
     }
 
     // createCommitment
@@ -78,8 +85,8 @@ contract DaysInARow is Ownable, Pausable {
             "Invalid loss account address"
         );
 
-        console.log("Start date: %s", _startDate);
-        console.log("Block timestamp: %s", block.timestamp);
+        // console.log("Start date: %s", _startDate);
+        // console.log("Block timestamp: %s", block.timestamp);
         require(
             _startDate > block.timestamp,
             "Start date must be in the future"
@@ -134,7 +141,10 @@ contract DaysInARow is Ownable, Pausable {
 
         uint256 dayNum = getDayNum(_commitmentId);
         require(dayNum > 0, "You can't check in before the start date");
-        require(dayNum > commitment.checkedInDays, "You can't check in twice for the same day");
+        require(
+            dayNum > commitment.checkedInDays,
+            "You can't check in twice for the same day"
+        );
 
         if (isAbandoned(_commitmentId)) {
             commitmentFailed(_commitmentId);
@@ -188,7 +198,7 @@ contract DaysInARow is Ownable, Pausable {
         commitmentFailed(_commitmentId);
     }
 
-    event Claimed(address indexed lossAccountAddress, uint256 amount);
+    event ClaimedAll(address indexed lossAccountAddress, uint256 amount);
 
     function claimAllForLossAccount(
         address _lossAccountAddress
@@ -209,21 +219,38 @@ contract DaysInARow is Ownable, Pausable {
         uint256 totalAmount = 0;
         for (uint256 i = 0; i < commitmentsForLossAccount.length; i++) {
             uint256 commitmentId = commitmentsForLossAccount[i];
+
             Commitment storage commitment = commitments[commitmentId];
 
             if (!commitment.failed && !commitment.completed) {
                 // only able to claim if the commitment has been abandoned for more than 1 day
                 if (isAbandoned(commitmentId)) {
-                    commitmentFailed(commitmentId);
-                    totalAmount =
-                        totalAmount +
-                        commitment.deposit -
-                        commitment.fee;
+                    totalAmount = totalAmount + claimOne(commitmentId);
                 }
             }
         }
         require(totalAmount > 0, "No commitments to claim");
-        emit Claimed(_lossAccountAddress, totalAmount);
+        emit ClaimedAll(_lossAccountAddress, totalAmount);
+    }
+
+    // Event for claiming a commitment
+    event ClaimedOne(address indexed lossAccountAddress, uint256 commitmentId, uint256 amount);
+
+    // function to claim just one commitment given the commitment id
+    function claimOne(
+        uint256 _commitmentId
+    ) public whenNotPaused returns (uint256) {
+        
+        finalizeCommitment(_commitmentId);
+        Commitment storage commitment = commitments[_commitmentId];
+
+        // claim amount
+        uint256 totalAmount = commitment.deposit - commitment.fee;
+
+        // emit event
+        emit ClaimedOne(commitment.lossAccountAddress, _commitmentId, totalAmount);
+
+        return totalAmount;
     }
 
     // function call commitmentFailed to fail a commitment

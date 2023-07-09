@@ -6,6 +6,8 @@ const { expect } = require("chai");
 const { BigNumber } = ethers;
 const { AddressZero } = require("@ethersproject/constants");
 
+// npx hardhat test
+
 describe("DaysInARow", function () {
     // We define a fixture to reuse the same setup in every test.
     // We use loadFixture to run this setup once, snapshot that state,
@@ -155,7 +157,7 @@ describe("DaysInARow", function () {
             expect(commitment.habitTitle).to.equal(habitTitle);
         });
 
-        it("Should create a commitment with correct accountCommitments and lossAccountCommitments values", async function () {
+        it("Should create a commitment with correct accountCommitments", async function () {
             const { daysInARow, value, expectedRakeAmount, commitmentId, lossAccountAddress, habitTitle, targetDays, startDateUnixTimestamp, testUser1 } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
 
             // expect the accountCommitments to be correct
@@ -164,6 +166,14 @@ describe("DaysInARow", function () {
             expect(accountCommitments[0]).to.equal(commitmentId);
         });
 
+        it("Should create a commitment with correct lossAccountCommitments", async function () {
+            const { daysInARow, value, expectedRakeAmount, commitmentId, lossAccountAddress, habitTitle, targetDays, startDateUnixTimestamp, testUser1 } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
+
+            // expect the accountCommitments to be correct
+            const lossAccountCommitments = await daysInARow.getLossAccountCommitments(lossAccountAddress);
+
+            expect(lossAccountCommitments[0]).to.equal(commitmentId);
+        });
 
         it("Should fail if no deposit is provided", async function () {
             const { daysInARow, lossAccount_1, testUser1 } = await loadFixture(deployDaysInARowFixture);
@@ -625,6 +635,18 @@ describe("DaysInARow", function () {
             expect(finalLossAccountBalance).to.equal(expectedTotalAccountBalance);
         });
 
+        it("Should claim one committment", async function () {
+            const { daysInARow, value, commitmentId, testUser1, lossAccount_1, targetDays, expectedRakeAmount } = await loadFixture(deployDaysInARowCreateCommitmentFixture);
+            await time.increase(86400 * 3); // Increase time by 3 days to fail the commitment
+
+            await expect(daysInARow.claimOne(commitmentId))
+                .to.emit(daysInARow, 'ClaimedOne')
+                .withArgs(lossAccount_1.address, commitmentId, value.sub(expectedRakeAmount));
+
+            const commitment = await daysInARow.commitments(commitmentId);
+            expect(commitment.failed).to.equal(true);
+        });
+
         it("Should emit a claim event", async function () {
             const { daysInARow, commitmentID1, commitmentID2, value, expectedTotalRakeAmount, lossAccount_1, lossAccount_2 } = await loadFixture(createMultipleCommitmentsFixture);
 
@@ -633,7 +655,7 @@ describe("DaysInARow", function () {
             const expectedTotalDeposit = value.mul(2).sub(expectedTotalRakeAmount);
 
             await expect(daysInARow.connect(lossAccount_2).claimAllForLossAccount(lossAccount_1.address))
-                .to.emit(daysInARow, "Claimed")
+                .to.emit(daysInARow, "ClaimedAll")
                 .withArgs(lossAccount_1.address, expectedTotalDeposit);
         });
 

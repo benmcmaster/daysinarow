@@ -1,9 +1,9 @@
 const {
-    time,
+    mine,
 } = require("@nomicfoundation/hardhat-network-helpers");
 
 async function main() {
-    await time.increase(86400); // Increase time by 1 day
+    await mine(1); // Mine 1 block
 }
 
 // We recommend this pattern to be able to use async/await everywhere

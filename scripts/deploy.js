@@ -7,11 +7,6 @@
 const hre = require("hardhat");
 
 async function main() {
-
-  // Contracts are deployed using the first signer/account by default
-  const [owner, lossAccount_1, lossAccount_2] = await ethers.getSigners();
-  const initialLossAccounts = [owner.address, lossAccount_1.address, lossAccount_2.address];
-
   const DaysInARow = await hre.ethers.getContractFactory("DaysInARow");
   const daysInARow = await DaysInARow.deploy();
 
