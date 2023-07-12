@@ -1,6 +1,19 @@
-# Sample Hardhat Project
+# Days in a Row
 
-This project demonstrates a basic Hardhat use case. It comes with a sample contract, a test for that contract, and a script that deploys that contract.
+This was built from a sample hardhat project.
+
+Contract: DaysInRow.sol
+Test: test/DaysInARow.js (npx hardhat test)
+
+Utility Scripts
+1. Deploy: scripts/deploy.js
+   Example: npx hardhat run --network sepolia scripts/deploy.js
+  
+2. nextDay: scripts/nextDay.js (advances the time of the Hardhat blockchain by one day)
+   Example: npx hardhat run --network localhost scripts/nextDay.js
+   
+4. mine: scripts/mine.js (mines a block to set the correct blocktime)
+   Example: npx hardhat run --network localhost scripts/mine.js
 
 Try running some of the following tasks:
 
